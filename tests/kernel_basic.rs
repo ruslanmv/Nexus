@@ -14,14 +14,22 @@ struct CountingAgent {
 
 impl CountingAgent {
     fn new(name: &str, count: Arc<AtomicUsize>) -> Self {
-        Self { id: Uuid::new_v4(), name: name.to_string(), count }
+        Self {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            count,
+        }
     }
 }
 
 #[async_trait]
 impl Agent for CountingAgent {
-    fn id(&self) -> Uuid { self.id }
-    fn name(&self) -> &str { &self.name }
+    fn id(&self) -> Uuid {
+        self.id
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
 
     async fn handle_message(&self, _msg: Message) -> Option<Message> {
         self.count.fetch_add(1, Ordering::SeqCst);
@@ -31,8 +39,10 @@ impl Agent for CountingAgent {
 
 #[tokio::test]
 async fn routes_messages_and_shutdowns() {
-    let mut cfg = KernelConfig::default();
-    cfg.mailbox_capacity = 8;
+    let cfg = KernelConfig {
+        mailbox_capacity: 8,
+        ..Default::default()
+    };
     let kernel = Kernel::new(cfg);
 
     let c1 = Arc::new(AtomicUsize::new(0));
@@ -42,7 +52,12 @@ async fn routes_messages_and_shutdowns() {
     let system = Uuid::new_v4();
     for _ in 0..5 {
         kernel
-            .send(Message::new(system, id, MessageKind::Event, json!({"ping": true})))
+            .send(Message::new(
+                system,
+                id,
+                MessageKind::Event,
+                json!({"ping": true}),
+            ))
             .await
             .unwrap();
     }
@@ -62,7 +77,12 @@ async fn returns_error_when_agent_missing() {
     let missing = Uuid::new_v4();
 
     let err = kernel
-        .send(Message::new(system, missing, MessageKind::Event, json!({"hello": "world"})))
+        .send(Message::new(
+            system,
+            missing,
+            MessageKind::Event,
+            json!({"hello": "world"}),
+        ))
         .await
         .unwrap_err();
 
