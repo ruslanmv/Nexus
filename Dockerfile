@@ -2,7 +2,7 @@
 # Multi-stage build for optimal image size
 
 # Build stage
-FROM rust:1.78-slim as builder
+FROM rust:1.78-slim AS builder
 
 WORKDIR /build
 
@@ -12,11 +12,12 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifests
-COPY Cargo.toml Cargo.lock ./
+# Copy manifests (Cargo.lock is OPTIONAL)
+COPY Cargo.toml ./
+COPY Cargo.lock* ./
 
 # Create dummy source to cache dependencies
-RUN mkdir src && \
+RUN mkdir -p src && \
     echo "fn main() {}" > src/main.rs && \
     echo "pub fn dummy() {}" > src/lib.rs
 
@@ -46,13 +47,14 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -u 1000 -s /bin/bash nexus
 
 # Create necessary directories
-RUN mkdir -p /etc/nexus /var/lib/nexus /var/log/nexus && \
+RUN mkdir -p /etc/nexus /var/lib/nexus /var/log/nexus /usr/share/doc/nexus /usr/share/nexus && \
     chown -R nexus:nexus /etc/nexus /var/lib/nexus /var/log/nexus
 
 # Copy binary from builder
 COPY --from=builder /build/target/release/nexus-runtime /usr/local/bin/nexus-runtime
 
-# Copy additional files
+# Copy additional files (best-effort: if these don't exist, build will fail.
+# If your repo doesn't have LICENSE, replace with `COPY README.md /usr/share/doc/nexus/`
 COPY README.md LICENSE /usr/share/doc/nexus/
 COPY bridges /usr/share/nexus/bridges/
 COPY examples /usr/share/nexus/examples/
