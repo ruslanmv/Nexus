@@ -1,0 +1,50 @@
+[Unit]
+Description=Nexus Agent Kernel Runtime
+Documentation=https://github.com/ruslanmv/Nexus
+After=network.target
+
+[Service]
+Type=simple
+User=nexus
+Group=nexus
+WorkingDirectory=/var/lib/nexus
+
+# Environment
+Environment="RUST_LOG=info"
+Environment="RUST_BACKTRACE=1"
+
+# Binary and configuration
+ExecStart=/usr/local/bin/nexus-runtime --config /etc/nexus/config.toml
+
+# Process management
+Restart=always
+RestartSec=10
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nexus
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+TasksMax=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexus
+
+[Install]
+WantedBy=multi-user.target
