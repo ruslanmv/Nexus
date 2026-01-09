@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct AgentMeta {
     name: String,
 }
@@ -75,7 +76,7 @@ impl Kernel {
                         let started = tokio::time::Instant::now();
 
                         // Protect the system against hung handlers.
-                        let res = timeout(cfg.handle_timeout, agent.handle_message(msg.clone())).await;
+                        let res = timeout(cfg.handle_timeout(), agent.handle_message(msg.clone())).await;
 
                         match res {
                             Ok(Some(response)) => {
@@ -94,7 +95,7 @@ impl Kernel {
                                 debug!(agent_id=%id, elapsed_ms=%started.elapsed().as_millis(), "agent handled message");
                             }
                             Err(_) => {
-                                warn!(agent_id=%id, timeout_ms=%cfg.handle_timeout.as_millis(), "agent handler timeout");
+                                warn!(agent_id=%id, timeout_ms=%cfg.handle_timeout().as_millis(), "agent handler timeout");
                             }
                         }
                     }
@@ -127,7 +128,7 @@ impl Kernel {
         let tx = entry.value().clone();
         drop(entry);
 
-        match timeout(self.config.send_timeout, tx.send(msg)).await {
+        match timeout(self.config.send_timeout(), tx.send(msg)).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(_closed)) => Err(KernelError::MailboxClosed(to)),
             Err(_elapsed) => Err(KernelError::SendTimeout(to)),

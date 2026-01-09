@@ -12,6 +12,6 @@ pub mod error;
 pub mod kernel;
 
 pub use agent::{Agent, Message, MessageKind};
-pub use config::KernelConfig;
+pub use config::{KernelConfig, LoggingConfig, NexusConfig, RuntimeConfig};
 pub use error::{KernelError, KernelResult};
 pub use kernel::Kernel;
