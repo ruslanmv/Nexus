@@ -3,13 +3,18 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., v0.3.0)'
+        description: "Version to release (e.g., v0.1.0)"
         required: true
         type: string
+
+# REQUIRED to fix: "Resource not accessible by integration"
+permissions:
+  contents: write   # create release + upload assets
+  packages: write   # push to GHCR (docker)
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,12 +23,14 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
-      - name: Get version from tag
+      - name: Get version
         id: get_version
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
@@ -31,14 +38,13 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.version }}
-          release_name: Nexus ${{ steps.get_version.outputs.version }}
+          name: Nexus ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: false
           body: |
             ## 🚀 Nexus ${{ steps.get_version.outputs.version }}
 
@@ -60,7 +66,7 @@ jobs:
             ```
 
             ### 📝 Changelog
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for full details.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
 
             ### 🔗 Quick Start
             ```bash
@@ -70,11 +76,11 @@ jobs:
             # Run with custom settings
             nexus-runtime -n 10 -d 30
 
-            # Generate config file
+            # Generate a config file
             nexus-runtime --generate-config config.toml
             ```
-          draft: false
-          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-binaries:
     name: Build ${{ matrix.target }}
@@ -89,7 +95,7 @@ jobs:
             os: ubuntu-latest
             archive: tar.gz
 
-          # Linux x86_64 (musl - static linking)
+          # Linux x86_64 (musl - static)
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz
@@ -104,7 +110,7 @@ jobs:
             os: macos-latest
             archive: tar.gz
 
-          # macOS ARM64 (M1/M2)
+          # macOS ARM64
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -125,6 +131,7 @@ jobs:
 
       - name: Install cross-compilation tools (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
@@ -138,66 +145,80 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
+        shell: bash
         run: cargo build --release --target ${{ matrix.target }} --all-features
 
       - name: Create archive (Unix)
         if: matrix.archive == 'tar.gz'
+        shell: bash
         run: |
-          VERSION=${{ needs.create-release.outputs.version }}
-          ARCHIVE_NAME="nexus-${VERSION}-${{ matrix.target }}"
-          mkdir -p "${ARCHIVE_NAME}"
+          VERSION="${{ needs.create-release.outputs.version }}"
+          ARCHIVE_DIR="nexus-${VERSION}-${{ matrix.target }}"
+          ARCHIVE_FILE="${ARCHIVE_DIR}.tar.gz"
 
-          # Copy binary
-          if [ -f "target/${{ matrix.target }}/release/nexus-runtime" ]; then
-            cp "target/${{ matrix.target }}/release/nexus-runtime" "${ARCHIVE_NAME}/"
+          mkdir -p "${ARCHIVE_DIR}"
+
+          # Binary name (Unix)
+          BIN_PATH="target/${{ matrix.target }}/release/nexus-runtime"
+          if [ -f "${BIN_PATH}" ]; then
+            cp "${BIN_PATH}" "${ARCHIVE_DIR}/"
+          else
+            echo "ERROR: binary not found at ${BIN_PATH}"
+            ls -la "target/${{ matrix.target }}/release" || true
+            exit 1
           fi
 
-          # Copy additional files
-          cp README.md LICENSE CHANGELOG.md "${ARCHIVE_NAME}/" || true
-          cp -r bridges examples scripts "${ARCHIVE_NAME}/" || true
+          # Optional docs/files
+          cp README.md LICENSE CHANGELOG.md "${ARCHIVE_DIR}/" 2>/dev/null || true
+          cp -r bridges examples scripts "${ARCHIVE_DIR}/" 2>/dev/null || true
 
-          # Create archive
-          tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
-          echo "ARCHIVE_PATH=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
-          echo "ARCHIVE_NAME=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+          tar czf "${ARCHIVE_FILE}" "${ARCHIVE_DIR}"
+
+          echo "ARCHIVE_PATH=${ARCHIVE_FILE}" >> $GITHUB_ENV
+          echo "ARCHIVE_NAME=${ARCHIVE_FILE}" >> $GITHUB_ENV
 
       - name: Create archive (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
           $VERSION = "${{ needs.create-release.outputs.version }}"
-          $ARCHIVE_NAME = "nexus-${VERSION}-${{ matrix.target }}"
+          $ARCHIVE_DIR = "nexus-$VERSION-${{ matrix.target }}"
+          $ARCHIVE_FILE = "$ARCHIVE_DIR.zip"
 
-          New-Item -ItemType Directory -Path $ARCHIVE_NAME -Force
+          New-Item -ItemType Directory -Path $ARCHIVE_DIR -Force | Out-Null
 
-          # Copy binary
-          if (Test-Path "target/${{ matrix.target }}/release/nexus-runtime.exe") {
-            Copy-Item "target/${{ matrix.target }}/release/nexus-runtime.exe" "$ARCHIVE_NAME/"
+          $BIN_PATH = "target/${{ matrix.target }}/release/nexus-runtime.exe"
+          if (Test-Path $BIN_PATH) {
+            Copy-Item $BIN_PATH "$ARCHIVE_DIR/"
+          } else {
+            Write-Host "ERROR: binary not found at $BIN_PATH"
+            Get-ChildItem "target/${{ matrix.target }}/release" -ErrorAction SilentlyContinue
+            exit 1
           }
 
-          # Copy additional files
-          Copy-Item "README.md", "LICENSE", "CHANGELOG.md" "$ARCHIVE_NAME/" -ErrorAction SilentlyContinue
-          Copy-Item "bridges", "examples", "scripts" "$ARCHIVE_NAME/" -Recurse -ErrorAction SilentlyContinue
+          Copy-Item "README.md","LICENSE","CHANGELOG.md" "$ARCHIVE_DIR/" -ErrorAction SilentlyContinue
+          Copy-Item "bridges","examples","scripts" "$ARCHIVE_DIR/" -Recurse -ErrorAction SilentlyContinue
 
-          # Create archive
-          Compress-Archive -Path $ARCHIVE_NAME -DestinationPath "${ARCHIVE_NAME}.zip"
-          echo "ARCHIVE_PATH=${ARCHIVE_NAME}.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "ARCHIVE_NAME=${ARCHIVE_NAME}.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Compress-Archive -Path $ARCHIVE_DIR -DestinationPath $ARCHIVE_FILE -Force
+
+          "ARCHIVE_PATH=$ARCHIVE_FILE" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ARCHIVE_NAME=$ARCHIVE_FILE" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: ${{ env.ARCHIVE_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ${{ env.ARCHIVE_PATH }}
-          asset_name: ${{ env.ARCHIVE_NAME }}
-          asset_content_type: application/octet-stream
 
   build-docker:
     name: Build Docker Image
     needs: create-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -219,8 +240,6 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}},value=${{ needs.create-release.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.create-release.outputs.version }}
-            type=semver,pattern={{major}},value=${{ needs.create-release.outputs.version }}
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -239,6 +258,8 @@ jobs:
     needs: [create-release, build-binaries]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -250,135 +271,3 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --all-features
-
-  create-installers:
-    name: Create Installers
-    needs: [create-release, build-binaries]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Create Debian package
-        run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          VERSION_NO_V="${VERSION#v}"
-
-          # Create directory structure
-          mkdir -p nexus_${VERSION_NO_V}_amd64/DEBIAN
-          mkdir -p nexus_${VERSION_NO_V}_amd64/usr/local/bin
-          mkdir -p nexus_${VERSION_NO_V}_amd64/etc/nexus
-          mkdir -p nexus_${VERSION_NO_V}_amd64/usr/share/doc/nexus
-
-          # Download binary (placeholder - in real scenario download from release)
-          # For now, we'll note this needs the binary from previous jobs
-
-          # Create control file
-          cat > nexus_${VERSION_NO_V}_amd64/DEBIAN/control << EOF
-          Package: nexus
-          Version: ${VERSION_NO_V}
-          Section: devel
-          Priority: optional
-          Architecture: amd64
-          Maintainer: Nexus Maintainers <nexus@example.com>
-          Description: The Universal Standard Kernel for Agentic AI
-           Nexus is a production-grade async kernel for autonomous agents.
-           Built in Rust with Tokio, it provides the execution substrate
-           for spawning, supervising, and routing thousands of concurrent
-           agents with deterministic behavior and operational safety.
-          EOF
-
-          # Copy documentation
-          cp README.md nexus_${VERSION_NO_V}_amd64/usr/share/doc/nexus/
-          cp LICENSE nexus_${VERSION_NO_V}_amd64/usr/share/doc/nexus/
-
-          echo "Debian package structure created"
-
-      - name: Create RPM spec
-        run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          VERSION_NO_V="${VERSION#v}"
-
-          mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-
-          cat > rpmbuild/SPECS/nexus.spec << EOF
-          Name:           nexus
-          Version:        ${VERSION_NO_V}
-          Release:        1%{?dist}
-          Summary:        The Universal Standard Kernel for Agentic AI
-
-          License:        Apache-2.0
-          URL:            https://github.com/${{ github.repository }}
-
-          %description
-          Nexus is a production-grade async kernel for autonomous agents.
-          Built in Rust with Tokio, it provides the execution substrate
-          for spawning, supervising, and routing thousands of concurrent
-          agents with deterministic behavior and operational safety.
-
-          %prep
-
-          %build
-
-          %install
-          mkdir -p %{buildroot}/%{_bindir}
-          mkdir -p %{buildroot}/%{_sysconfdir}/nexus
-
-          %files
-          %license LICENSE
-          %doc README.md
-          %{_bindir}/nexus-runtime
-          %config(noreplace) %{_sysconfdir}/nexus/config.toml
-
-          %changelog
-          * $(date +'%a %b %d %Y') Nexus Maintainers <nexus@example.com> - ${VERSION_NO_V}-1
-          - Release ${VERSION_NO_V}
-          EOF
-
-          echo "RPM spec created"
-
-  update-homebrew:
-    name: Update Homebrew Formula
-    needs: [create-release, build-binaries]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Create Homebrew formula
-        run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          VERSION_NO_V="${VERSION#v}"
-
-          cat > nexus.rb << EOF
-          class Nexus < Formula
-            desc "The Universal Standard Kernel for Agentic AI"
-            homepage "https://github.com/${{ github.repository }}"
-            url "https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
-            license "Apache-2.0"
-
-            depends_on "rust" => :build
-
-            def install
-              system "cargo", "install", "--locked", "--root", prefix, "--path", "."
-
-              # Install configuration
-              (etc/"nexus").mkpath
-              (etc/"nexus/config.toml").write <<~EOS
-                [kernel]
-                mailbox_capacity = 1024
-                send_timeout_ms = 500
-                handle_timeout_ms = 30000
-
-                [logging]
-                level = "info"
-                format = "compact"
-              EOS
-            end
-
-            test do
-              assert_match "Nexus", shell_output("#{bin}/nexus-runtime --version")
-            end
-          end
-          EOF
-
-          echo "Homebrew formula created. Submit to homebrew-core or create tap."
-          cat nexus.rb
